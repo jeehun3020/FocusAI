@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama AI 튜터 챗봇</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons for aesthetic -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f6f7f8; 
+        }
+        .toss-blue { background-color: #3182F6; }
+        .toss-blue-hover { background-color: #2563EB; }
+        .toss-text-blue { color: #3182F6; }
+        /* Custom scrollbar */
+        #chat-history::-webkit-scrollbar { width: 6px; }
+        #chat-history::-webkit-scrollbar-thumb { background-color: #93c5fd; }
+        #chat-history::-webkit-scrollbar-track { background-color: #e0f2fe; }
+
+        .style-button {
+            transition: all 0.2s;
+            white-space: nowrap; /* 버튼 내용이 줄바꿈되지 않도록 */
+        }
+        .style-button:not(.selected):hover {
+            border-color: #3182F6;
+            background-color: #EFF6FF; 
+        }
+        .style-button.selected {
+            background-color: #3182F6;
+            color: white;
+            border-color: #3182F6;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="min-h-screen flex items-center justify-center p-4 sm:p-6">
+        <div class="w-full max-w-xl bg-white shadow-2xl rounded-3xl flex flex-col h-[90vh]">
+            
+            <!-- Header (White with Blue text) -->
+            <header class="p-5 border-b border-gray-100 bg-white rounded-t-3xl sticky top-0 z-10">
+                <h1 class="text-3xl font-extrabold toss-text-blue text-center">
+                    🤖 AI 에듀 챗봇 📚
+                </h1>
+                <p id="current-style-display" class="mt-1 text-center text-sm font-medium text-gray-500 transition-opacity duration-300">
+                    답변 스타일을 선택해주세요.
+                </p>
+            </header>
+
+            <!-- Chat History -->
+            <main id="chat-history" class="flex-grow p-4 space-y-5 overflow-y-auto">
+                <!-- Initial Welcome Message -->
+                <div class="flex justify-start">
+                    <div class="max-w-xs sm:max-w-md bg-gray-100 text-gray-800 p-4 rounded-2xl rounded-tl-sm shadow-sm">
+                        <p class="font-bold text-sm toss-text-blue mb-1">AI 튜터</p>
+                        <p>안녕하세요! 궁금한 개념을 물어보시고, 원하는 답변 스타일을 선택해주세요!</p>
+                    </div>
+                </div>
+                <!-- Messages will be appended here -->
+            </main>
+
+            <!-- Input Area -->
+            <div class="p-4 border-t border-gray-100 sticky bottom-0 bg-white">
+                
+                <!-- Style Selection Buttons -->
+                <div id="style-buttons-container" class="flex flex-wrap gap-2 mb-3 overflow-x-auto pb-1">
+                    <!-- Buttons will be dynamically inserted here -->
+                </div>
+
+                <div id="loading-indicator" class="hidden text-center text-sm font-semibold text-gray-500 mb-2">
+                    <div class="flex items-center justify-center space-x-2">
+                        <svg class="animate-spin h-5 w-5 toss-text-blue" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>AI 에듀 챗봇이 생각 중이에요...</span>
+                    </div>
+                </div>
+                
+                <div class="flex space-x-3">
+                    <textarea id="user-input" 
+                        class="flex-grow p-3 border-2 border-gray-200 rounded-2xl focus:ring-2 focus:ring-[#3182F6] focus:border-[#3182F6] transition duration-150 resize-none h-12 overflow-hidden" 
+                        placeholder="궁금한 내용을 입력하세요..."
+                        rows="1"
+                        oninput="autoResize(this)"
+                        onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); }"></textarea>
+                    
+                    <button id="send-button" onclick="sendMessage()"
+                        class="toss-blue text-white w-12 h-12 rounded-2xl flex items-center justify-center hover:bg-blue-600 active:bg-blue-700 transition duration-150 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i data-lucide="send" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // ====================================================================
+        // 1. 설정 및 초기화
+        // ====================================================================
+
+        const BACKEND_URL = 'http://localhost:5000/chat';
+        
+        const styles = [
+            "초등학생도 이해할 수 있게 설명해줘.",
+            "재밌는 예시로 알려줘.",
+            "교과서 스타일로 정리해줘.",
+            "블로그 글처럼 설명해줘.",
+            "친절한 선생님처럼 말해줘."
+        ];
+
+        // DOM 요소
+        const chatHistoryEl = document.getElementById('chat-history');
+        const userInputEl = document.getElementById('user-input');
+        const sendButtonEl = document.getElementById('send-button');
+        const loadingIndicatorEl = document.getElementById('loading-indicator');
+        const styleDisplayEl = document.getElementById('current-style-display');
+        const styleButtonsContainer = document.getElementById('style-buttons-container');
+
+        let chatHistory = [];
+        let selectedStyle = styles[0]; // 기본 스타일을 첫 번째 항목으로 설정
+
+        // 텍스트 영역 자동 높이 조절
+        window.autoResize = (textarea) => {
+            textarea.style.height = 'auto';
+            const maxHeight = 150; 
+            textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
+        };
+
+        // ====================================================================
+        // 2. 스타일 버튼 렌더링 및 로직
+        // ====================================================================
+
+        /**
+         * 스타일 버튼을 화면에 렌더링하고 클릭 이벤트를 설정합니다.
+         */
+        const renderStyleButtons = () => {
+            styleButtonsContainer.innerHTML = ''; // 기존 버튼 제거
+            
+            styles.forEach(style => {
+                const button = document.createElement('button');
+                button.textContent = style.replace('.', '').replace('설명해줘', '').trim(); // 버튼 텍스트 정리
+                button.classList.add(
+                    'style-button', 
+                    'text-sm', 
+                    'font-medium', 
+                    'px-3', 
+                    'py-1.5', 
+                    'rounded-full', 
+                    'border-2', 
+                    'border-gray-200', 
+                    'text-gray-700'
+                );
+                
+                // 선택된 스타일을 표시
+                if (style === selectedStyle) {
+                    button.classList.add('selected');
+                }
+
+                button.onclick = () => selectStyle(style, button);
+                styleButtonsContainer.appendChild(button);
+            });
+        };
+
+        /**
+         * 스타일 선택 시 상태를 업데이트합니다.
+         * @param {string} style 클릭된 스타일 텍스트
+         * @param {HTMLElement} clickedButton 클릭된 버튼 요소
+         */
+        const selectStyle = (style, clickedButton) => {
+            selectedStyle = style;
+            styleDisplayEl.textContent = `선택된 스타일: ${style.replace('.', '')}`;
+            
+            // 모든 버튼에서 'selected' 클래스 제거
+            document.querySelectorAll('.style-button').forEach(btn => {
+                btn.classList.remove('selected', 'toss-blue', 'text-white', 'border-toss-blue');
+                btn.classList.add('text-gray-700', 'border-gray-200');
+            });
+
+            // 클릭된 버튼에 'selected' 클래스 추가
+            clickedButton.classList.add('selected');
+        };
+
+
+        // ====================================================================
+        // 3. UI 렌더링 및 메인 전송 로직
+        // ====================================================================
+
+        /**
+         * 채팅 메시지를 화면에 추가하고 스크롤을 맨 아래로 이동합니다.
+         */
+        const appendMessage = (role, text, styleText = null) => {
+            const messageWrapper = document.createElement('div');
+            messageWrapper.className = role === 'user' ? 'flex justify-end' : 'flex justify-start';
+
+            const messageBubble = document.createElement('div');
+            // 토스 스타일의 둥근 모서리와 깔끔한 배경
+            messageBubble.className = `max-w-xs sm:max-w-md p-4 rounded-2xl shadow-sm whitespace-pre-wrap`;
+
+            if (role === 'user') {
+                // 사용자 메시지: 파란색 배경
+                messageBubble.className += ' toss-blue text-white rounded-br-sm';
+            } else {
+                // AI 메시지: 밝은 회색 배경
+                messageBubble.className += ' bg-gray-100 text-gray-800 rounded-tl-sm';
+                
+                // AI 답변일 경우 스타일 정보 추가
+                if (styleText) {
+                    const styleInfo = document.createElement('p');
+                    styleInfo.className = 'font-bold text-sm toss-text-blue mb-1';
+                    styleInfo.textContent = `AI 튜터 (${styleText.replace('.', '').replace('설명해줘', '').replace('요', '').trim()})`; 
+                    messageBubble.appendChild(styleInfo);
+                }
+            }
+
+            // 텍스트 내용 추가
+            const textNode = document.createElement('p');
+            textNode.textContent = text;
+            messageBubble.appendChild(textNode);
+            
+            messageWrapper.appendChild(messageBubble);
+            chatHistoryEl.appendChild(messageWrapper);
+
+            // 스크롤 맨 아래로 이동
+            chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+        };
+
+        
+        window.sendMessage = async () => {
+            const userQuery = userInputEl.value.trim();
+            if (!userQuery) return;
+            if (!selectedStyle) {
+                alert("⚠️ 답변 스타일을 먼저 선택해주세요!");
+                return;
+            }
+
+            // UI 상태 변경: 입력 비활성화, 로딩 표시
+            sendButtonEl.disabled = true;
+            userInputEl.disabled = true;
+            loadingIndicatorEl.classList.remove('hidden');
+            styleDisplayEl.textContent = `[${selectedStyle.replace('.', '').replace('설명해줘', '').trim()}] 스타일로 답변 생성 중...`;
+            
+            // 1. 사용자 메시지 추가 및 입력 초기화
+            appendMessage('user', userQuery);
+            userInputEl.value = '';
+            userInputEl.style.height = '48px'; 
+
+            // 2. 백엔드에 보낼 데이터 구성
+            const payload = {
+                question: userQuery,
+                style: selectedStyle, // <-- 선택된 스타일 전송
+                chat_history: chatHistory
+            };
+
+            let aiResponseText = '';
+            let receivedStyle = '';
+
+            // 3. Flask API 호출
+            try {
+                const response = await fetch(BACKEND_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ error: '서버 응답 오류' }));
+                    throw new Error(`백엔드 오류! 상태: ${response.status}. 상세: ${errorData.error}`);
+                }
+
+                const result = await response.json();
+                aiResponseText = result.response;
+                receivedStyle = result.style; 
+
+            } catch (error) {
+                console.error("Flask API 호출 중 오류 발생:", error);
+                aiResponseText = `⚠️ 연결 오류: AI 튜터 서버에 접속할 수 없습니다. \n'app.py' 파일과 Ollama 서버가 실행 중인지 확인해 주세요. 상세 오류: ${error.message}`;
+                receivedStyle = '연결 실패';
+            }
+
+            // 4. 응답 UI에 추가
+            appendMessage('model', aiResponseText, receivedStyle);
+
+            // 5. 대화 기록 업데이트 (성공적으로 응답을 받았을 때만 기록)
+            if (aiResponseText && receivedStyle !== '연결 실패') {
+                chatHistory.push({ role: 'user', content: userQuery });
+                chatHistory.push({ role: 'ai', content: aiResponseText });
+            }
+
+            // 6. UI 상태 복원
+            sendButtonEl.disabled = false;
+            userInputEl.disabled = false;
+            loadingIndicatorEl.classList.add('hidden');
+            userInputEl.focus();
+            styleDisplayEl.textContent = `선택된 스타일: ${selectedStyle.replace('.', '')}`;
+        };
+
+        // 초기 로드 시 버튼 렌더링
+        window.onload = () => {
+            lucide.createIcons();
+            renderStyleButtons();
+            // 기본 스타일 선택 버튼을 시각적으로 활성화
+            const defaultButton = styleButtonsContainer.querySelector('.style-button');
+            if(defaultButton) {
+                selectStyle(selectedStyle, defaultButton);
+            }
+        };
+
+    </script>
+</body>
+</html>
